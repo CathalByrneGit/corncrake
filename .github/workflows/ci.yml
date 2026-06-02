@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Redocly CLI
+        run: npm install -g @redocly/cli@latest
       - name: Validate OpenAPI spec
-        uses: char0n/swagger-editor-validate@v1
-        with:
-          definition-file: docs/openapi.yaml
+        run: redocly lint docs/openapi.yaml
