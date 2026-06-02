@@ -17,7 +17,7 @@ Part of the [Corncrake toolchain](#ecosystem).
 
 ## Why Corncrake
 
-Most statistical agencies run submission portals that require organisations to generate a specific XML or JSON file in proprietary payroll software and upload it manually. This locks out organisations running SAP, Workday, Oracle, or bespoke systems that don't have a supported export path.
+The existing EHECS submission process requires generating a schema-specific XML file and uploading it manually through a web portal. There is no direct API integration path — every system, regardless of how sophisticated, ends up exporting a file and clicking upload.
 
 Corncrake provides the API layer that removes the manual step — payroll software submits directly in real time, the same way Revenue's PAYE Modernisation works. The tenant architecture means the same infrastructure serves multiple survey types without duplicating code.
 
