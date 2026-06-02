@@ -72,6 +72,10 @@ go run .
 
 Full specification: [`docs/openapi.yaml`](docs/openapi.yaml)
 
+### A note on path parameters
+
+The submission endpoint uses multiple path parameters following Revenue's PAYE Modernisation URL convention. Each segment serves as an idempotency key — submitting the same `submissionId` twice is safe and returns the original result without duplicate processing. This pattern is intentional and familiar to any developer already integrating with Revenue's API.
+
 ---
 
 ## Authentication
@@ -93,6 +97,8 @@ Bearer JWT in the `Authorization` header. At minimum the token must carry:
   "softwareVersion": "2026.1"
 }
 ```
+
+**Note on JWT security:** JWTs are signed, not encrypted — claims in the payload are readable by anyone who holds the token. Never put sensitive data in claims. Tokens must be issued by the Corncrake auth service; clients must not construct or modify their own tokens. For machine-to-machine integration, OAuth 2.0 client credentials flow (exchanging a `client_id` and `client_secret` for a short-lived access token) is the recommended production pattern.
 
 ---
 
@@ -143,7 +149,7 @@ Source: *CSO Notes for Payroll Software Providers on EHECS Requirements v4.0*
 | Timeline | Action |
 |----------|--------|
 | Now | Enable hybrid post-quantum TLS at the load balancer (AWS ALB, Azure, Cloudflare — no code changes needed) |
-| 12–18 months | Migrate JWT signing RS256 → ML-DSA (NIST FIPS 204) once Go ecosystem has stable support |
+| 12–18 months | Migrate JWT signing RS256 → ML-DSA (NIST FIPS 204) once Go ecosystem has stable support; migrate auth to OAuth 2.0 client credentials |
 | No action needed | PBKDF2 hashing and AES-256 Always Encrypted are not meaningfully vulnerable to quantum attack |
 
 ---
