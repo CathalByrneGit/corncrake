@@ -138,9 +138,9 @@ Source: *CSO Notes for Payroll Software Providers on EHECS Requirements v4.0*
 ## Credential storage
 
 - Plain-text secret generated once, emailed to the employer, **never stored**
-- PBKDF2-HMAC-SHA256 hash + unique salt persisted per credential
+- PBKDF2-HMAC-SHA256 hash + unique salt persisted per credential (Argon2id target — see roadmap)
 - SQL Server deployments: hash and salt columns use **Always Encrypted**
-- Append-only audit log for every AUTH_SUCCESS and AUTH_FAIL
+- Append-only audit log for every AUTH_SUCCESS and AUTH_FAIL (token verification events included)
 
 ---
 
@@ -149,8 +149,9 @@ Source: *CSO Notes for Payroll Software Providers on EHECS Requirements v4.0*
 | Timeline | Action |
 |----------|--------|
 | Now | Enable hybrid post-quantum TLS at the load balancer (AWS ALB, Azure, Cloudflare — no code changes needed) |
+| Near-term | Migrate credential hashing PBKDF2-HMAC-SHA256 → Argon2id (GPU-resistant; stdlib `golang.org/x/crypto/argon2`) |
 | 12–18 months | Migrate JWT signing RS256 → ML-DSA (NIST FIPS 204) once Go ecosystem has stable support; migrate auth to OAuth 2.0 client credentials |
-| No action needed | PBKDF2 hashing and AES-256 Always Encrypted are not meaningfully vulnerable to quantum attack |
+| No action needed | AES-256 Always Encrypted is not meaningfully vulnerable to quantum attack |
 
 ---
 
@@ -176,8 +177,9 @@ corncrake/
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3000` | Listen port |
-| `APP_ENV` | `development` | `json` logging in production |
-| `JWT_SECRET` | dev secret | **Change in production** |
+| `APP_ENV` | `development` | `json` logging; enables HTTPS enforcement when set to `production` |
+| `JWT_PUBLIC_KEY` | — | PEM-encoded RSA public key — enables RS256 JWT verification (recommended for production) |
+| `JWT_SECRET` | dev secret | HS256 fallback — used only when `JWT_PUBLIC_KEY` is not set. **Change in production** |
 | `DB_DRIVER` | `memory` | `memory` \| `postgres` \| `sqlserver` |
 | `DATABASE_URL` | — | Required for `postgres` / `sqlserver` |
 
