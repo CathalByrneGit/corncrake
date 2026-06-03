@@ -52,7 +52,7 @@ func newRouter(t *testing.T) (chi.Router, *services.MemoryStore) {
 	r.Get("/corncrake/v1/health", handlers.Health)
 
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.Authenticate(testSecret))
+		r.Use(middleware.Authenticate(middleware.AuthConfig{HMACSecret: []byte(testSecret)}))
 
 		const base = "/corncrake/v1/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}"
 		r.With(middleware.RequireSoftwareParams).Post(base+"/{submissionId}", subH.Create)

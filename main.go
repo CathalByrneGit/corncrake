@@ -10,6 +10,9 @@
 package main
 
 import (
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -34,7 +37,14 @@ func main() {
 	slog.SetDefault(logger)
 
 	port := envOrDefault("PORT", "3000")
-	secret := envOrDefault("JWT_SECRET", "ehecs-dev-secret-replace-in-production")
+
+	// JWT verification: prefer RS256 (JWT_PUBLIC_KEY), fall back to HS256 (JWT_SECRET)
+	authCfg := buildAuthConfig()
+	revStore := middleware.NewRevocationStore()
+	authCfg.Revocation = revStore
+
+	// Rate limiter: 60 req/min per IP (1 token/s) with burst of 30
+	rl := middleware.NewRateLimiter(1.0, 30)
 
 	// Select store backend from DB_DRIVER env var: memory | postgres | sqlserver
 	store, err := services.NewStore(services.DBConfigFromEnv())
@@ -53,13 +63,15 @@ func main() {
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.Timeout(30 * time.Second))
 	r.Use(securityHeaders)
+	r.Use(enforceHTTPS)
 
 	// ── Unauthenticated ────────────────────────────────────────────────────
 	r.Get("/corncrake/v1/health", handlers.Health)
 
 	// ── Authenticated routes ───────────────────────────────────────────────
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.Authenticate(secret))
+		r.Use(rl.Limit())
+		r.Use(middleware.Authenticate(authCfg))
 
 		// Submission endpoints
 		// Path mirrors Revenue: /{holdingNumber}/{taxYear}/{quarter}/{runRef}/{subId}
@@ -94,6 +106,51 @@ func main() {
 		slog.Error("Server failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+// buildAuthConfig loads JWT verification config from environment variables.
+// JWT_PUBLIC_KEY (PEM-encoded RSA public key) enables RS256.
+// Falls back to HS256 with JWT_SECRET when JWT_PUBLIC_KEY is absent.
+func buildAuthConfig() middleware.AuthConfig {
+	if pubKeyPEM := os.Getenv("JWT_PUBLIC_KEY"); pubKeyPEM != "" {
+		block, _ := pem.Decode([]byte(pubKeyPEM))
+		if block == nil {
+			slog.Error("JWT_PUBLIC_KEY: failed to decode PEM block")
+			os.Exit(1)
+		}
+		pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+		if err != nil {
+			slog.Error("JWT_PUBLIC_KEY: failed to parse key", "err", err)
+			os.Exit(1)
+		}
+		rsaPub, ok := pub.(*rsa.PublicKey)
+		if !ok {
+			slog.Error("JWT_PUBLIC_KEY: key is not RSA")
+			os.Exit(1)
+		}
+		slog.Info("JWT verification mode: RS256")
+		return middleware.AuthConfig{RSAPublicKey: rsaPub}
+	}
+	slog.Warn("JWT verification mode: HS256 — set JWT_PUBLIC_KEY for RS256 in production")
+	return middleware.AuthConfig{
+		HMACSecret: []byte(envOrDefault("JWT_SECRET", "ehecs-dev-secret-replace-in-production")),
+	}
+}
+
+// enforceHTTPS rejects plain HTTP in production by inspecting X-Forwarded-Proto,
+// which the load balancer sets before forwarding to this service.
+func enforceHTTPS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if os.Getenv("APP_ENV") == "production" {
+			if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" && proto != "https" {
+				http.Error(w,
+					`{"status":400,"errors":[{"code":"HTTPS_REQUIRED","message":"This API requires HTTPS."}]}`,
+					http.StatusBadRequest)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requestLogger is a minimal structured request logger using slog.
