@@ -25,6 +25,7 @@ import (
 	"github.com/CathalByrneGit/corncrake/internal/handlers"
 	"github.com/CathalByrneGit/corncrake/internal/middleware"
 	"github.com/CathalByrneGit/corncrake/internal/services"
+	_ "github.com/CathalByrneGit/corncrake/internal/tenants/ehecs"
 )
 
 func main() {
@@ -74,8 +75,8 @@ func main() {
 		r.Use(middleware.Authenticate(authCfg))
 
 		// Submission endpoints
-		// Path mirrors Revenue: /{holdingNumber}/{taxYear}/{quarter}/{runRef}/{subId}
-		const subBase = "/corncrake/v1/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}"
+		// Path: /{tenantID}/{holdingNumber}/{taxYear}/{quarter}/{runRef}/{subId}
+		const subBase = "/corncrake/v1/{tenantID}/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}"
 
 		r.With(middleware.RequireSoftwareParams).Post(
 			subBase+"/{submissionId}", subH.Create)
@@ -83,7 +84,7 @@ func main() {
 			subBase+"/{submissionId}", subH.GetSubmission)
 		r.With(middleware.RequireSoftwareParams).Get(
 			subBase, subH.GetRun)
-		r.Get("/corncrake/v1/submissions/{holdingNumber}", subH.ListSubmissions)
+		r.Get("/corncrake/v1/{tenantID}/submissions/{holdingNumber}", subH.ListSubmissions)
 
 		// Lookup endpoints
 		r.Get("/corncrake/v1/lookups/occupation-codes", handlers.GetOccupationCodes)

@@ -17,6 +17,7 @@ import (
 	"github.com/CathalByrneGit/corncrake/internal/middleware"
 	"github.com/CathalByrneGit/corncrake/internal/models"
 	"github.com/CathalByrneGit/corncrake/internal/services"
+	_ "github.com/CathalByrneGit/corncrake/internal/tenants/ehecs"
 )
 
 const (
@@ -54,11 +55,11 @@ func newRouter(t *testing.T) (chi.Router, *services.MemoryStore) {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Authenticate(middleware.AuthConfig{HMACSecret: []byte(testSecret)}))
 
-		const base = "/corncrake/v1/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}"
+		const base = "/corncrake/v1/{tenantID}/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}"
 		r.With(middleware.RequireSoftwareParams).Post(base+"/{submissionId}", subH.Create)
 		r.With(middleware.RequireSoftwareParams).Get(base+"/{submissionId}", subH.GetSubmission)
 		r.With(middleware.RequireSoftwareParams).Get(base, subH.GetRun)
-		r.Get("/corncrake/v1/submissions/{holdingNumber}", subH.ListSubmissions)
+		r.Get("/corncrake/v1/{tenantID}/submissions/{holdingNumber}", subH.ListSubmissions)
 		r.Get("/corncrake/v1/lookups/occupation-codes", handlers.GetOccupationCodes)
 		r.Get("/corncrake/v1/lookups/schema-version", handlers.GetSchemaVersion)
 	})
@@ -131,7 +132,7 @@ func TestHealth(t *testing.T) {
 func TestAuth_NoToken(t *testing.T) {
 	r, _ := newRouter(t)
 	q := "?softwareUsed=X&softwareVersion=1"
-	rr := post(t, r, "/corncrake/v1/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID+q, "", validBody())
+	rr := post(t, r, "/corncrake/v1/ehecs/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID+q, "", validBody())
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rr.Code)
 	}
@@ -140,7 +141,7 @@ func TestAuth_NoToken(t *testing.T) {
 func TestAuth_InvalidToken(t *testing.T) {
 	r, _ := newRouter(t)
 	q := "?softwareUsed=X&softwareVersion=1"
-	rr := post(t, r, "/corncrake/v1/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID+q,
+	rr := post(t, r, "/corncrake/v1/ehecs/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID+q,
 		"not.a.valid.token", validBody())
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rr.Code)
@@ -151,7 +152,7 @@ func TestCreate_Valid(t *testing.T) {
 	r, _ := newRouter(t)
 	tok := testToken(t, testHolding)
 	q := "?softwareUsed=TestSuite&softwareVersion=1.0"
-	rr := post(t, r, "/corncrake/v1/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID+q,
+	rr := post(t, r, "/corncrake/v1/ehecs/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID+q,
 		tok, validBody())
 
 	if rr.Code != http.StatusCreated {
@@ -171,7 +172,7 @@ func TestCreate_Valid(t *testing.T) {
 func TestCreate_MissingSoftwareParams(t *testing.T) {
 	r, _ := newRouter(t)
 	tok := testToken(t, testHolding)
-	rr := post(t, r, "/corncrake/v1/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID,
+	rr := post(t, r, "/corncrake/v1/ehecs/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID,
 		tok, validBody())
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
@@ -182,7 +183,7 @@ func TestCreate_WrongHoldingNumber(t *testing.T) {
 	r, _ := newRouter(t)
 	tok := testToken(t, testHolding)
 	q := "?softwareUsed=X&softwareVersion=1"
-	rr := post(t, r, "/corncrake/v1/submissions/WRONGHOLDER/2026/1/"+testRunRef+"/"+testSubID+q,
+	rr := post(t, r, "/corncrake/v1/ehecs/submissions/WRONGHOLDER/2026/1/"+testRunRef+"/"+testSubID+q,
 		tok, validBody())
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", rr.Code)
@@ -195,7 +196,7 @@ func TestCreate_InvalidPPSN(t *testing.T) {
 	q := "?softwareUsed=X&softwareVersion=1"
 	body := validBody()
 	body["employees"].([]map[string]any)[0]["ppsn"] = "BADPPSN"
-	rr := post(t, r, "/corncrake/v1/submissions/"+testHolding+"/2026/1/"+testRunRef+"/new-uuid-1"+q,
+	rr := post(t, r, "/corncrake/v1/ehecs/submissions/"+testHolding+"/2026/1/"+testRunRef+"/new-uuid-1"+q,
 		tok, body)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d\nbody: %s", rr.Code, rr.Body.String())
@@ -214,7 +215,7 @@ func TestCreate_OvertimeInconsistency(t *testing.T) {
 	body := validBody()
 	body["employees"].([]map[string]any)[0]["overtimePay"] = 500.0
 	body["employees"].([]map[string]any)[0]["overtimeHours"] = 0.0
-	rr := post(t, r, "/corncrake/v1/submissions/"+testHolding+"/2026/1/"+testRunRef+"/new-uuid-2"+q,
+	rr := post(t, r, "/corncrake/v1/ehecs/submissions/"+testHolding+"/2026/1/"+testRunRef+"/new-uuid-2"+q,
 		tok, body)
 	if rr.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d\nbody: %s", rr.Code, rr.Body.String())
@@ -233,7 +234,7 @@ func TestCreate_EarningsInconsistency(t *testing.T) {
 	body := validBody()
 	body["employees"].([]map[string]any)[0]["grossEarnings"] = 100.0
 	body["employees"].([]map[string]any)[0]["overtimePay"] = 500.0
-	rr := post(t, r, "/corncrake/v1/submissions/"+testHolding+"/2026/1/"+testRunRef+"/new-uuid-3"+q,
+	rr := post(t, r, "/corncrake/v1/ehecs/submissions/"+testHolding+"/2026/1/"+testRunRef+"/new-uuid-3"+q,
 		tok, body)
 	if rr.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d", rr.Code)
@@ -245,10 +246,10 @@ func TestGetSubmission_Found(t *testing.T) {
 	tok := testToken(t, testHolding)
 	q := "?softwareUsed=X&softwareVersion=1"
 	// Create first
-	post(t, r, "/corncrake/v1/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID+q, tok, validBody())
+	post(t, r, "/corncrake/v1/ehecs/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID+q, tok, validBody())
 
 	// Then retrieve
-	rr := get(t, r, "/corncrake/v1/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID+q, tok)
+	rr := get(t, r, "/corncrake/v1/ehecs/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID+q, tok)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d\nbody: %s", rr.Code, rr.Body.String())
 	}
@@ -258,7 +259,7 @@ func TestGetSubmission_NotFound(t *testing.T) {
 	r, _ := newRouter(t)
 	tok := testToken(t, testHolding)
 	q := "?softwareUsed=X&softwareVersion=1"
-	rr := get(t, r, "/corncrake/v1/submissions/"+testHolding+"/2026/1/"+testRunRef+"/unknown-id"+q, tok)
+	rr := get(t, r, "/corncrake/v1/ehecs/submissions/"+testHolding+"/2026/1/"+testRunRef+"/unknown-id"+q, tok)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rr.Code)
 	}
@@ -268,9 +269,9 @@ func TestListSubmissions(t *testing.T) {
 	r, _ := newRouter(t)
 	tok := testToken(t, testHolding)
 	q := "?softwareUsed=X&softwareVersion=1"
-	post(t, r, "/corncrake/v1/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID+q, tok, validBody())
+	post(t, r, "/corncrake/v1/ehecs/submissions/"+testHolding+"/2026/1/"+testRunRef+"/"+testSubID+q, tok, validBody())
 
-	rr := get(t, r, "/corncrake/v1/submissions/"+testHolding, tok)
+	rr := get(t, r, "/corncrake/v1/ehecs/submissions/"+testHolding, tok)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
@@ -324,7 +325,7 @@ func TestCreate_HoursExceededCap(t *testing.T) {
 	q := "?softwareUsed=X&softwareVersion=1"
 	body := validBody()
 	body["employees"].([]map[string]any)[0]["basicHours"] = 9999.0
-	rr := post(t, r, "/corncrake/v1/submissions/"+testHolding+"/2026/1/"+testRunRef+"/new-uuid-4"+q,
+	rr := post(t, r, "/corncrake/v1/ehecs/submissions/"+testHolding+"/2026/1/"+testRunRef+"/new-uuid-4"+q,
 		tok, body)
 	if rr.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d\nbody: %s", rr.Code, rr.Body.String())
@@ -357,7 +358,7 @@ func TestCreate_MultipleEmployees(t *testing.T) {
 	}
 	body["employees"] = append(employees, emp2)
 
-	rr := post(t, r, fmt.Sprintf("/corncrake/v1/submissions/%s/2026/1/%s/new-uuid-5%s",
+	rr := post(t, r, fmt.Sprintf("/corncrake/v1/ehecs/submissions/%s/2026/1/%s/new-uuid-5%s",
 		testHolding, testRunRef, q), tok, body)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d\nbody: %s", rr.Code, rr.Body.String())
@@ -365,7 +366,7 @@ func TestCreate_MultipleEmployees(t *testing.T) {
 	var resp models.APIResponse
 	decode(t, rr, &resp)
 	data := resp.Data.(map[string]any)
-	if data["employeeCount"].(float64) != 2 {
-		t.Errorf("expected employeeCount=2, got %v", data["employeeCount"])
+	if data["itemCount"].(float64) != 2 {
+		t.Errorf("expected itemCount=2, got %v", data["itemCount"])
 	}
 }
