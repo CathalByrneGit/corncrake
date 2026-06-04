@@ -4,23 +4,19 @@
 package services
 
 import (
+	"encoding/json"
 	"errors"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/CathalByrneGit/corncrake/internal/models"
-	"github.com/CathalByrneGit/corncrake/internal/validators"
 )
 
 // ErrNotFound is returned when a requested resource does not exist.
 var ErrNotFound = errors.New("not found")
 
-// ErrValidation is returned when business logic validation fails.
-var ErrValidation = errors.New("validation failed")
-
 // SubmissionStore is the interface a persistent backend must implement.
-// The in-memory implementation below satisfies it.
 type SubmissionStore interface {
 	Create(params CreateParams) (*CreateResult, error)
 	GetByID(submissionID string) (*models.SubmissionRecord, error)
@@ -28,32 +24,42 @@ type SubmissionStore interface {
 	List(holdingNumber string, taxYear, quarter int) ([]models.SubmissionSummary, error)
 }
 
-// CreateParams bundles everything needed to create a submission.
+// CreateParams bundles everything needed to persist a submission.
+// Validation must happen before this is called — the store only persists.
 type CreateParams struct {
-	SubmissionID string `json:"submissionId"`
-	RunReference string
-	Body         *models.SubmissionRequest
-	Client       *models.ClientIdentity
+	TenantID      string
+	SubmissionID  string
+	RunReference  string
+	HoldingNumber string
+	TaxYear       int
+	Quarter       int
+	ReturnType    models.ReturnType
+	Body          json.RawMessage
+	ItemCount     int
+	Warnings      []models.ValidationItem
+	Client        *models.ClientIdentity
+	ContactEmail  string
+	ContactPhone  string
+	Comments      string
 }
 
 // CreateResult is the immediate response after a successful submission.
 type CreateResult struct {
-	SubmissionID  string                  `json:"submissionId"`
-	RunReference  string                  `json:"runReference"`
-	Status        string                  `json:"status"`
-	ReceivedAt    time.Time               `json:"receivedAt"`
-	EmployeeCount int                     `json:"employeeCount"`
-	Warnings      []models.ValidationItem `json:"warnings,omitempty"`
+	SubmissionID string                  `json:"submissionId"`
+	RunReference string                  `json:"runReference"`
+	Status       string                  `json:"status"`
+	ReceivedAt   time.Time               `json:"receivedAt"`
+	ItemCount    int                     `json:"itemCount"`
+	Warnings     []models.ValidationItem `json:"warnings,omitempty"`
 }
 
 // ── In-memory store ───────────────────────────────────────────────────────────
 
 // MemoryStore is a thread-safe in-memory implementation of SubmissionStore.
-// Replace with a PostgreSQL-backed store for production.
 type MemoryStore struct {
 	mu          sync.RWMutex
-	submissions map[string]*models.SubmissionRecord // submissionID → record
-	runs        map[string][]string                 // runReference → []submissionID
+	submissions map[string]*models.SubmissionRecord
+	runs        map[string][]string // runReference → []submissionID
 }
 
 // NewMemoryStore creates an initialised in-memory store.
@@ -64,49 +70,56 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
-// Create validates and stores a new submission.
 func (s *MemoryStore) Create(p CreateParams) (*CreateResult, error) {
-	// Business logic validation
-	logicErrs, warnings := validators.ValidateSubmissionLogic(p.Body)
-	if len(logicErrs) > 0 {
-		return nil, &ValidationError{Items: logicErrs, Warnings: warnings}
-	}
+	receivedAt := time.Now().UTC()
 
 	record := &models.SubmissionRecord{
 		SubmissionID:    p.SubmissionID,
+		TenantID:        p.TenantID,
 		RunReference:    p.RunReference,
-		HoldingNumber:   p.Body.HoldingNumber,
-		TaxYear:         p.Body.TaxYear,
-		Quarter:         p.Body.Quarter,
-		ReturnType:      p.Body.ReturnType,
+		HoldingNumber:   p.HoldingNumber,
+		TaxYear:         p.TaxYear,
+		Quarter:         p.Quarter,
+		ReturnType:      p.ReturnType,
 		Status:          "RECEIVED",
-		ReceivedAt:      time.Now().UTC(),
+		ReceivedAt:      receivedAt,
 		SoftwareUsed:    p.Client.SoftwareUsed,
 		SoftwareVersion: p.Client.SoftwareVersion,
-		EmployeeCount:   len(p.Body.Employees),
-		Employees:       p.Body.Employees,
-		Warnings:        warnings,
-		ContactEmail:    p.Body.ContactEmail,
-		ContactPhone:    p.Body.ContactPhone,
-		Comments:        p.Body.Comments,
+		ItemCount:       p.ItemCount,
+		Body:            p.Body,
+		Warnings:        p.Warnings,
+		ContactEmail:    p.ContactEmail,
+		ContactPhone:    p.ContactPhone,
+		Comments:        p.Comments,
 	}
 
 	s.mu.Lock()
+	// Idempotent: if already stored, return the existing result unchanged.
+	if existing, ok := s.submissions[p.SubmissionID]; ok {
+		s.mu.Unlock()
+		return &CreateResult{
+			SubmissionID: existing.SubmissionID,
+			RunReference: existing.RunReference,
+			Status:       existing.Status,
+			ReceivedAt:   existing.ReceivedAt,
+			ItemCount:    existing.ItemCount,
+			Warnings:     existing.Warnings,
+		}, nil
+	}
 	s.submissions[p.SubmissionID] = record
 	s.runs[p.RunReference] = append(s.runs[p.RunReference], p.SubmissionID)
 	s.mu.Unlock()
 
 	return &CreateResult{
-		SubmissionID:  p.SubmissionID,
-		RunReference:  p.RunReference,
-		Status:        "RECEIVED",
-		ReceivedAt:    record.ReceivedAt,
-		EmployeeCount: record.EmployeeCount,
-		Warnings:      warnings,
+		SubmissionID: p.SubmissionID,
+		RunReference: p.RunReference,
+		Status:       "RECEIVED",
+		ReceivedAt:   receivedAt,
+		ItemCount:    p.ItemCount,
+		Warnings:     p.Warnings,
 	}, nil
 }
 
-// GetByID retrieves a full submission record.
 func (s *MemoryStore) GetByID(submissionID string) (*models.SubmissionRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -117,7 +130,6 @@ func (s *MemoryStore) GetByID(submissionID string) (*models.SubmissionRecord, er
 	return r, nil
 }
 
-// GetRun returns aggregated status for all submissions under a run reference.
 func (s *MemoryStore) GetRun(runReference string) (*models.RunStatus, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -128,23 +140,23 @@ func (s *MemoryStore) GetRun(runReference string) (*models.RunStatus, error) {
 	run := &models.RunStatus{RunReference: runReference}
 	for _, id := range ids {
 		r := s.submissions[id]
-		run.TotalEmployees += r.EmployeeCount
+		run.TotalItems += r.ItemCount
 		run.Submissions = append(run.Submissions, models.SubmissionSummary{
-			SubmissionID:  r.SubmissionID,
-			RunReference:  r.RunReference,
-			Quarter:       r.Quarter,
-			TaxYear:       r.TaxYear,
-			ReturnType:    r.ReturnType,
-			Status:        r.Status,
-			ReceivedAt:    r.ReceivedAt,
-			EmployeeCount: r.EmployeeCount,
+			SubmissionID: r.SubmissionID,
+			TenantID:     r.TenantID,
+			RunReference: r.RunReference,
+			Quarter:      r.Quarter,
+			TaxYear:      r.TaxYear,
+			ReturnType:   r.ReturnType,
+			Status:       r.Status,
+			ReceivedAt:   r.ReceivedAt,
+			ItemCount:    r.ItemCount,
 		})
 	}
 	run.TotalSubmissions = len(run.Submissions)
 	return run, nil
 }
 
-// List returns all submissions for a holding number, optionally filtered by year/quarter.
 func (s *MemoryStore) List(holdingNumber string, taxYear, quarter int) ([]models.SubmissionSummary, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -160,29 +172,19 @@ func (s *MemoryStore) List(holdingNumber string, taxYear, quarter int) ([]models
 			continue
 		}
 		results = append(results, models.SubmissionSummary{
-			SubmissionID:  r.SubmissionID,
-			RunReference:  r.RunReference,
-			Quarter:       r.Quarter,
-			TaxYear:       r.TaxYear,
-			ReturnType:    r.ReturnType,
-			Status:        r.Status,
-			ReceivedAt:    r.ReceivedAt,
-			EmployeeCount: r.EmployeeCount,
+			SubmissionID: r.SubmissionID,
+			TenantID:     r.TenantID,
+			RunReference: r.RunReference,
+			Quarter:      r.Quarter,
+			TaxYear:      r.TaxYear,
+			ReturnType:   r.ReturnType,
+			Status:       r.Status,
+			ReceivedAt:   r.ReceivedAt,
+			ItemCount:    r.ItemCount,
 		})
 	}
-	// Stable sort newest first
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].ReceivedAt.After(results[j].ReceivedAt)
 	})
 	return results, nil
 }
-
-// ── ValidationError ───────────────────────────────────────────────────────────
-
-// ValidationError carries both errors and warnings from business logic checks.
-type ValidationError struct {
-	Items    []models.ValidationItem
-	Warnings []models.ValidationItem
-}
-
-func (e *ValidationError) Error() string { return ErrValidation.Error() }

@@ -3,56 +3,51 @@ package handlers
 import (
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/CathalByrneGit/corncrake/internal/tenant"
 )
 
-// OccupationCodes is the CSO SOC-2010 broad categories lookup.
-// Embedded as a static slice — no database needed for reference data.
-var OccupationCodes = []struct {
-	Code         int      `json:"code"`
-	Label        string   `json:"label"`
-	NACEExamples []string `json:"naceExamples"`
-}{
-	{1, "Managers, Directors & Senior Officials", []string{"M", "K", "O"}},
-	{2, "Professional Occupations", []string{"P", "Q", "M"}},
-	{3, "Associate Professional & Technical", []string{"J", "M", "K"}},
-	{4, "Administrative & Secretarial", []string{"O", "K", "N"}},
-	{5, "Skilled Trades Occupations", []string{"C", "F", "G"}},
-	{6, "Caring, Leisure & Service", []string{"Q", "I", "R"}},
-	{7, "Sales & Customer Service", []string{"G", "I", "N"}},
-	{8, "Process, Plant & Machine Operatives", []string{"C", "F", "H"}},
-	{9, "Elementary Occupations", []string{"I", "N", "H"}},
-}
+// GetLookup handles GET /corncrake/v1/{tenantID}/lookups/{lookupName}
+// Dispatches to the tenant's LookupProvider. Returns 404 for unknown tenants,
+// tenants that don't implement LookupProvider, or unknown lookup names.
+func GetLookup(w http.ResponseWriter, r *http.Request) {
+	tenantID := chi.URLParam(r, "tenantID")
+	name := chi.URLParam(r, "lookupName")
 
-// GetOccupationCodes handles GET /lookups/occupation-codes
-func GetOccupationCodes(w http.ResponseWriter, r *http.Request) {
-	search := strings.ToLower(r.URL.Query().Get("search"))
-	if search == "" {
-		JSONWithCount(w, http.StatusOK, OccupationCodes, len(OccupationCodes))
+	t := tenant.Lookup(tenantID)
+	if t == nil {
+		JSONError(w, http.StatusNotFound, "UNKNOWN_TENANT",
+			"No tenant registered with ID: "+tenantID)
 		return
 	}
 
-	var filtered []struct {
-		Code         int      `json:"code"`
-		Label        string   `json:"label"`
-		NACEExamples []string `json:"naceExamples"`
-	}
-	for _, c := range OccupationCodes {
-		if strings.Contains(strings.ToLower(c.Label), search) ||
-			fmt.Sprintf("%d", c.Code) == search {
-			filtered = append(filtered, c)
-		}
+	lp, ok := t.(tenant.LookupProvider)
+	if !ok {
+		JSONError(w, http.StatusNotFound, "NO_LOOKUPS",
+			"Tenant "+tenantID+" does not provide lookup data.")
+		return
 	}
 
-	JSONWithCount(w, http.StatusOK, filtered, len(filtered))
+	data, count, found := lp.Lookup(name, r)
+	if !found {
+		JSONError(w, http.StatusNotFound, "UNKNOWN_LOOKUP",
+			"No lookup '"+name+"' for tenant "+tenantID)
+		return
+	}
+
+	JSONWithCount(w, http.StatusOK, data, count)
 }
 
-// GetPeriods handles GET /lookups/periods/{holdingNumber}
+// GetPeriods handles GET /corncrake/v1/{tenantID}/lookups/periods/{holdingNumber}
+// Returns the five most recent open quarterly reporting periods.
+// Period logic is survey-agnostic — any tenant using quarterly periods can use this endpoint.
 func GetPeriods(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	currentYear := now.Year()
-	currentQ    := int((now.Month()-1)/3) + 1
+	currentQ := int((now.Month()-1)/3) + 1
 
 	type period struct {
 		TaxYear  int    `json:"taxYear"`
@@ -81,17 +76,4 @@ func GetPeriods(w http.ResponseWriter, r *http.Request) {
 	}
 
 	JSONWithCount(w, http.StatusOK, periods, len(periods))
-}
-
-// GetSchemaVersion handles GET /lookups/schema-version
-func GetSchemaVersion(w http.ResponseWriter, r *http.Request) {
-	JSON(w, http.StatusOK, struct {
-		Version          string `json:"schemaVersion"`
-		XMLNamespace     string `json:"xmlNamespace"`
-		SpecificationURL string `json:"specificationUrl"`
-	}{
-		Version:          "5.0.0",
-		XMLNamespace:     "http://www.cso.ie/ehecs/schema/v5",
-		SpecificationURL: "https://www.cso.ie/en/methods/earnings/earningsmethodologicaltechnicaldocuments",
-	})
 }

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -9,7 +10,7 @@ import (
 
 	"github.com/CathalByrneGit/corncrake/internal/models"
 	"github.com/CathalByrneGit/corncrake/internal/services"
-	"github.com/CathalByrneGit/corncrake/internal/validators"
+	"github.com/CathalByrneGit/corncrake/internal/tenant"
 )
 
 // SubmissionHandler groups all submission endpoints.
@@ -17,9 +18,18 @@ type SubmissionHandler struct {
 	Store services.SubmissionStore
 }
 
-// Create handles POST /submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}/{submissionId}
-// Mirrors: POST /paye-employers/v1/rest/payroll/{empRegNum}/{taxYear}/{runRef}/{subId}
+// submissionMeta extracts common fields shared across all tenant submission bodies.
+type submissionMeta struct {
+	HoldingNumber string            `json:"holdingNumber"`
+	ReturnType    models.ReturnType `json:"returnType"`
+	ContactEmail  string            `json:"contactEmail"`
+	ContactPhone  string            `json:"contactPhone"`
+	Comments      string            `json:"comments"`
+}
+
+// Create handles POST /corncrake/v1/{tenantID}/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}/{submissionId}
 func (h *SubmissionHandler) Create(w http.ResponseWriter, r *http.Request) {
+	tenantID := chi.URLParam(r, "tenantID")
 	holdingNumber := chi.URLParam(r, "holdingNumber")
 	taxYear := mustInt(chi.URLParam(r, "taxYear"))
 	quarter := mustInt(chi.URLParam(r, "quarter"))
@@ -34,35 +44,57 @@ func (h *SubmissionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body models.SubmissionRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		JSONError(w, http.StatusBadRequest, "INVALID_JSON", "Request body is not valid JSON: "+err.Error())
+	// Resolve the tenant
+	t := tenant.Lookup(tenantID)
+	if t == nil {
+		JSONError(w, http.StatusNotFound, "UNKNOWN_TENANT",
+			"No survey type registered for tenantID: "+tenantID)
 		return
 	}
 
+	// Read raw body
+	rawBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		JSONError(w, http.StatusBadRequest, "INVALID_JSON", "Failed to read request body: "+err.Error())
+		return
+	}
+	raw := json.RawMessage(rawBytes)
+
 	// Layer 1: schema validation (HTTP 400)
-	if schemaErrs := validators.ValidateSubmissionRequest(&body); len(schemaErrs) > 0 {
+	if schemaErrs := t.ValidateSchema(raw); len(schemaErrs) > 0 {
 		JSONErrors(w, http.StatusBadRequest, schemaErrs, nil)
 		return
 	}
 
-	// Sync path params into body (path is authoritative for these fields)
-	body.HoldingNumber = holdingNumber
-	body.TaxYear = taxYear
-	body.Quarter = quarter
+	// Extract common meta fields (path params are authoritative for holdingNumber/taxYear/quarter)
+	var meta submissionMeta
+	_ = json.Unmarshal(raw, &meta)
 
-	// Layer 2: business logic (HTTP 422) + persist
+	// Layer 2: business logic validation (HTTP 422)
+	logicErrs, warnings := t.ValidateLogic(raw)
+	if len(logicErrs) > 0 {
+		JSONErrors(w, http.StatusUnprocessableEntity, logicErrs, warnings)
+		return
+	}
+
+	// Persist
 	result, err := h.Store.Create(services.CreateParams{
-		SubmissionID: submissionID,
-		RunReference: runReference,
-		Body:         &body,
-		Client:       client,
+		TenantID:      tenantID,
+		SubmissionID:  submissionID,
+		RunReference:  runReference,
+		HoldingNumber: holdingNumber,
+		TaxYear:       taxYear,
+		Quarter:       quarter,
+		ReturnType:    meta.ReturnType,
+		Body:          raw,
+		ItemCount:     t.ItemCount(raw),
+		Warnings:      warnings,
+		Client:        client,
+		ContactEmail:  meta.ContactEmail,
+		ContactPhone:  meta.ContactPhone,
+		Comments:      meta.Comments,
 	})
 	if err != nil {
-		if ve, ok := err.(*services.ValidationError); ok {
-			JSONErrors(w, http.StatusUnprocessableEntity, ve.Items, ve.Warnings)
-			return
-		}
 		JSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "An unexpected error occurred.")
 		return
 	}
@@ -70,7 +102,7 @@ func (h *SubmissionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusCreated, result)
 }
 
-// GetSubmission handles GET /submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}/{submissionId}
+// GetSubmission handles GET /corncrake/v1/{tenantID}/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}/{submissionId}
 func (h *SubmissionHandler) GetSubmission(w http.ResponseWriter, r *http.Request) {
 	holdingNumber := chi.URLParam(r, "holdingNumber")
 	submissionID := chi.URLParam(r, "submissionId")
@@ -91,7 +123,7 @@ func (h *SubmissionHandler) GetSubmission(w http.ResponseWriter, r *http.Request
 	JSON(w, http.StatusOK, record)
 }
 
-// GetRun handles GET /submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}
+// GetRun handles GET /corncrake/v1/{tenantID}/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}
 func (h *SubmissionHandler) GetRun(w http.ResponseWriter, r *http.Request) {
 	runReference := chi.URLParam(r, "runReference")
 
@@ -105,7 +137,7 @@ func (h *SubmissionHandler) GetRun(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, run)
 }
 
-// ListSubmissions handles GET /submissions/{holdingNumber}
+// ListSubmissions handles GET /corncrake/v1/{tenantID}/submissions/{holdingNumber}
 func (h *SubmissionHandler) ListSubmissions(w http.ResponseWriter, r *http.Request) {
 	holdingNumber := chi.URLParam(r, "holdingNumber")
 	client := clientFromContext(r)
