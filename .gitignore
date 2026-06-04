@@ -2,3 +2,4 @@ corncrake
 *.env
 coverage.out
 /cmd/debug/
+.claude/
