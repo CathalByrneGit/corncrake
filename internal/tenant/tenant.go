@@ -3,6 +3,7 @@ package tenant
 
 import (
 	"encoding/json"
+	"net/http"
 	"sync"
 
 	"github.com/CathalByrneGit/corncrake/internal/models"
@@ -21,6 +22,15 @@ type Tenant interface {
 	ValidateLogic(body json.RawMessage) (errors, warnings []models.ValidationItem)
 	// ItemCount extracts the number of individual records in the body (e.g. employee count).
 	ItemCount(body json.RawMessage) int
+}
+
+// LookupProvider is an optional extension of Tenant for tenants that expose
+// named reference datasets at GET /corncrake/v1/{tenantID}/lookups/{lookupName}.
+// Implement this alongside Tenant to add lookup endpoints for a survey type.
+// The request is passed so implementations can handle query params (e.g. ?search=).
+// count is included in the response envelope; pass 0 to omit it (e.g. for a singleton).
+type LookupProvider interface {
+	Lookup(name string, r *http.Request) (data any, count int, ok bool)
 }
 
 var (

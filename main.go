@@ -86,10 +86,9 @@ func main() {
 			subBase, subH.GetRun)
 		r.Get("/corncrake/v1/{tenantID}/submissions/{holdingNumber}", subH.ListSubmissions)
 
-		// Lookup endpoints
-		r.Get("/corncrake/v1/lookups/occupation-codes", handlers.GetOccupationCodes)
-		r.Get("/corncrake/v1/lookups/periods/{holdingNumber}", handlers.GetPeriods)
-		r.Get("/corncrake/v1/lookups/schema-version", handlers.GetSchemaVersion)
+		// Lookup endpoints — tenant-scoped; periods is survey-agnostic date math
+		r.Get("/corncrake/v1/{tenantID}/lookups/periods/{holdingNumber}", handlers.GetPeriods)
+		r.Get("/corncrake/v1/{tenantID}/lookups/{lookupName}", handlers.GetLookup)
 	})
 
 	// ── 404 handler ────────────────────────────────────────────────────────

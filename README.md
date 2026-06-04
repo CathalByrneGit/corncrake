@@ -25,22 +25,64 @@ Corncrake provides the API layer that removes the manual step — payroll softwa
 
 ## Adding a new survey tenant
 
-Implement two interfaces and register in `init()`:
+Create a package under `internal/tenants/` that implements `tenant.Tenant` and calls `tenant.Register` from `init()`:
 
 ```go
-func init() {
-    tenant.Register(&tenant.Config{
-        ID:          "my-survey",
-        Name:        "My Statistical Survey",
-        BaseURL:     "https://api.example.ie/survey/v1",
-        FieldSchema: myFields,
-        Validator:   &MySurveyValidator{},
-        Formatter:   &MySurveyFormatter{},
-    })
+// internal/tenants/mysurvey/mysurvey.go
+package mysurvey
+
+import (
+    "encoding/json"
+    "github.com/CathalByrneGit/corncrake/internal/models"
+    "github.com/CathalByrneGit/corncrake/internal/tenant"
+)
+
+func init() { tenant.Register(&MySurvey{}) }
+
+type MySurvey struct{}
+
+func (s *MySurvey) ID() string   { return "my-survey" }
+func (s *MySurvey) Name() string { return "My Statistical Survey" }
+
+func (s *MySurvey) ValidateSchema(body json.RawMessage) []models.ValidationItem {
+    // your structural checks → HTTP 400
+    return nil
+}
+
+func (s *MySurvey) ValidateLogic(body json.RawMessage) (errors, warnings []models.ValidationItem) {
+    // your cross-field checks → HTTP 422
+    return nil, nil
+}
+
+func (s *MySurvey) ItemCount(body json.RawMessage) int {
+    // how many records are in the body (used in run status summaries)
+    return 0
 }
 ```
 
-The API, validation pipeline, authentication, and database layer work unchanged for every registered tenant.
+Then add a blank import to `main.go`:
+
+```go
+import _ "github.com/CathalByrneGit/corncrake/internal/tenants/mysurvey"
+```
+
+Submissions are immediately available at `/corncrake/v1/my-survey/submissions/...`. No other code changes needed — the auth, routing, rate limiting, token revocation, and database layer all work unchanged.
+
+### Optional: lookup data
+
+To expose reference data at `GET /corncrake/v1/my-survey/lookups/{name}`, also implement `tenant.LookupProvider`:
+
+```go
+func (s *MySurvey) Lookup(name string, r *http.Request) (data any, count int, ok bool) {
+    switch name {
+    case "codes":
+        return myCodes, len(myCodes), true
+    }
+    return nil, 0, false
+}
+```
+
+`?search=` and other query parameters are available via `r.URL.Query()`. Tenants that don't implement `LookupProvider` return 404 on any lookup request — they don't inherit another tenant's data.
 
 ---
 
@@ -59,16 +101,19 @@ go run .
 
 ## Endpoints
 
+All submission and lookup routes are tenant-scoped under `/{tenantID}/`. The EHECS tenant ships with the service; add your own by implementing `tenant.Tenant` (see [Adding a new survey tenant](#adding-a-new-survey-tenant)).
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET`  | `/corncrake/v1/health` | None | Health check |
-| `POST` | `/corncrake/v1/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}/{submissionId}` | JWT | Create submission |
-| `GET`  | `/corncrake/v1/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}/{submissionId}` | JWT | Retrieve submission |
-| `GET`  | `/corncrake/v1/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}` | JWT | Run status |
-| `GET`  | `/corncrake/v1/submissions/{holdingNumber}` | JWT | List submissions |
-| `GET`  | `/corncrake/v1/lookups/occupation-codes` | JWT | CSO SOC-2010 codes |
-| `GET`  | `/corncrake/v1/lookups/periods/{holdingNumber}` | JWT | Open reporting periods |
-| `GET`  | `/corncrake/v1/lookups/schema-version` | JWT | Schema version |
+| `POST` | `/corncrake/v1/{tenantID}/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}/{submissionId}` | JWT | Create submission |
+| `GET`  | `/corncrake/v1/{tenantID}/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}/{submissionId}` | JWT | Retrieve submission |
+| `GET`  | `/corncrake/v1/{tenantID}/submissions/{holdingNumber}/{taxYear}/{quarter}/{runReference}` | JWT | Run status |
+| `GET`  | `/corncrake/v1/{tenantID}/submissions/{holdingNumber}` | JWT | List submissions |
+| `GET`  | `/corncrake/v1/{tenantID}/lookups/{lookupName}` | JWT | Tenant-specific reference data |
+| `GET`  | `/corncrake/v1/{tenantID}/lookups/periods/{holdingNumber}` | JWT | Open quarterly reporting periods |
+
+**EHECS lookup names** (tenant `ehecs`): `occupation-codes` (supports `?search=`), `schema-version`.
 
 Full specification: [`docs/openapi.yaml`](docs/openapi.yaml)
 

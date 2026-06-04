@@ -60,8 +60,8 @@ func newRouter(t *testing.T) (chi.Router, *services.MemoryStore) {
 		r.With(middleware.RequireSoftwareParams).Get(base+"/{submissionId}", subH.GetSubmission)
 		r.With(middleware.RequireSoftwareParams).Get(base, subH.GetRun)
 		r.Get("/corncrake/v1/{tenantID}/submissions/{holdingNumber}", subH.ListSubmissions)
-		r.Get("/corncrake/v1/lookups/occupation-codes", handlers.GetOccupationCodes)
-		r.Get("/corncrake/v1/lookups/schema-version", handlers.GetSchemaVersion)
+		r.Get("/corncrake/v1/{tenantID}/lookups/periods/{holdingNumber}", handlers.GetPeriods)
+		r.Get("/corncrake/v1/{tenantID}/lookups/{lookupName}", handlers.GetLookup)
 	})
 
 	return r, store
@@ -285,7 +285,7 @@ func TestListSubmissions(t *testing.T) {
 func TestGetOccupationCodes(t *testing.T) {
 	r, _ := newRouter(t)
 	tok := testToken(t, testHolding)
-	rr := get(t, r, "/corncrake/v1/lookups/occupation-codes", tok)
+	rr := get(t, r, "/corncrake/v1/ehecs/lookups/occupation-codes", tok)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
@@ -299,7 +299,7 @@ func TestGetOccupationCodes(t *testing.T) {
 func TestGetOccupationCodes_Search(t *testing.T) {
 	r, _ := newRouter(t)
 	tok := testToken(t, testHolding)
-	rr := get(t, r, "/corncrake/v1/lookups/occupation-codes?search=manager", tok)
+	rr := get(t, r, "/corncrake/v1/ehecs/lookups/occupation-codes?search=manager", tok)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
@@ -313,7 +313,7 @@ func TestGetOccupationCodes_Search(t *testing.T) {
 func TestGetSchemaVersion(t *testing.T) {
 	r, _ := newRouter(t)
 	tok := testToken(t, testHolding)
-	rr := get(t, r, "/corncrake/v1/lookups/schema-version", tok)
+	rr := get(t, r, "/corncrake/v1/ehecs/lookups/schema-version", tok)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
